@@ -1,2 +1,3 @@
-# serverless-mlops
-Template for serverless machine learning workflow.
+# Simple Serverless ML Ops Template
+
+![Architecture](src/image/architecture.png)
