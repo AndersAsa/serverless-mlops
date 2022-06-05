@@ -1,0 +1,18 @@
+{
+    "StartAt": "Build",
+    "States": {
+      "Build": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::glue:startJobRun.sync",
+        "Parameters": {
+          "JobName": "${Build}"
+        },
+        "Next": "Deploy"
+      },
+      "Deploy": {
+        "Type":"Task",
+        "Resource":"${Deploy}",
+        "End": true
+      }
+    }
+  }

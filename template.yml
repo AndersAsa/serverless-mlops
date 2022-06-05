@@ -1,0 +1,131 @@
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+
+  GluePermissions:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "glue.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: access_script
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 's3:GetObject'
+                Resource: 'arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*'
+              - Effect: Allow
+                Action: 's3:PutObject'
+                Resource: !Sub '${Artifacts.Arn}/*'
+
+  Build:
+    Type: AWS::Glue::Job
+    Properties:
+      MaxCapacity: 1
+      Command:
+        Name: pythonshell
+        ScriptLocation: "src/batch/build/build.py"
+        PythonVersion: 3
+      DefaultArguments:
+        "--bucket": !Ref Artifacts
+        "--prefix": 'model_artifacts/latest/'
+        "--feature_table": !Ref FeatureTable
+      Role: !GetAtt GluePermissions.Arn
+
+  FeatureTable:
+    Type: AWS::Serverless::SimpleTable
+
+  Artifacts:
+    Type: AWS::S3::Bucket
+
+  Deploy:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/batch/deploy
+      Handler: deploy.deploy
+      Runtime: python3.8
+      AutoPublishAlias: prod
+      Environment:
+        Variables:
+          bucket: !Ref Artifacts
+          prefix: 'model_artifacts/latest'
+          inference: !Ref Inference
+      Timeout: 60
+      MemorySize: 256
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref Artifacts
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: lambda:*
+              Resource: !Sub '${Inference.Arn}*'
+
+  Orchestrator:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: src/batch/orchestrator.json
+      DefinitionSubstitutions:
+        Build: !Ref Build
+        Deploy: !GetAtt Deploy.Arn
+      Events:
+        RetrainTrigger:
+          Type: Schedule
+          Properties:
+            Enabled: False
+            Schedule: 'rate(1 day)'
+      Policies:
+        - CloudWatchPutMetricPolicy: {}
+        - LambdaInvokePolicy:
+            FunctionName: !Ref Deploy
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: glue:*
+              Resource: !Sub 'arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${Build}'
+
+  Inference:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/inference/
+      Layers:
+        - !Sub 'arn:aws:lambda:${AWS::Region}:446751924810:layer:python-3-8-scikit-learn-0-22-0:3'
+      Environment:
+        Variables:
+          bucket: !Ref Artifacts
+          artifact_prefix: 'model_artifacts/latest/'
+          feature_table: !Ref FeatureTable
+      Handler: score.predict
+      Runtime: python3.8
+      AutoPublishAlias: champion
+      FunctionUrlConfig:
+        AuthType: AWS_IAM
+      Timeout: 60
+      MemorySize: 4096
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref Artifacts
+
+  LatestAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref Inference
+      FunctionVersion: $LATEST
+      Name: latest
+
+  ChallengerAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref Inference
+      FunctionVersion: $LATEST
+      Name: challenger
