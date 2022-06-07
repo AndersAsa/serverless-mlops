@@ -1,3 +1,3 @@
 # Simple Serverless ML Ops Template
 
-![Architecture](src/image/architecture.png)
+![Architecture](src/img/architecture.png)
